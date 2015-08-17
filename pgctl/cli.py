@@ -123,10 +123,43 @@ class PgctlApp(object):
 
         self.unsupervise()
 
-        # start supervise in the foreground with the service up
+        # start supervise in the foreground
         service = self.services[0]
-        service.path.join('down').remove()
-        exec_(('supervise', service.path.strpath), env=service.supervise_env)  # pragma: no cover
+        proc = Popen(
+            (('supervise', service.path.strpath)),
+            env=service.supervise_env,
+        )
+
+        # set up signal handlers
+        import signal
+
+        def pass_signal(signum, frame):  # pylint: disable=unused-argument
+            try:
+                proc.send_signal(signum)
+            except OSError as ex:
+                if ex.errno == 3:
+                    # No such process; safe to ignore
+                    pass
+                else:
+                    raise
+
+        try:
+            for signum in range(1, 32):
+                if signum not in (signal.SIGKILL, signal.SIGSTOP, signal.SIGCHLD):
+                    signal.signal(signum, pass_signal)
+
+            # start the service once, take supervise down when the service goes down
+            svc(('-ux', service.path.strpath))
+
+            proc.wait()
+        finally:
+            # restore default signal handlers
+            for signum in range(1, 32):
+                if signum not in (signal.SIGKILL, signal.SIGSTOP, signal.SIGCHLD):
+                    signal.signal(signum, signal.SIG_DFL)
+
+        # re-supervise the process and bring it back up
+        self.start()
 
     def config(self):
         """Print the configuration for a service"""
